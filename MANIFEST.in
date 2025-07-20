@@ -1,0 +1,3 @@
+include pygofastproxy/go/*.go
+include pygofastproxy/go/go.mod
+include pygofastproxy/go/go.sum

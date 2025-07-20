@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pygofastproxy"
+version = "1.0.2"
+description = "A blazing-fast HTTP proxy for Python, powered by Go’s fasthttp library"
+readme = "README.md"
+authors = [{ name = "Laurent Zogaj" }]
+license = "MIT"
+requires-python = ">=3.8"
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent"
+]
+
+[tool.setuptools]
+packages = ["pygofastproxy"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+pygofastproxy = ["go/*.go", "go/go.mod", "go/go.sum"]
+
+[project.urls]
+Homepage = "https://github.com/26zl/pygofastproxy"
