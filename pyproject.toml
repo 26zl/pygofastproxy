@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pygofastproxy"
-version = "1.0.3"
+version = "1.0.4"
 description = "A blazing-fast HTTP proxy for Python, powered by Go’s fasthttp library"
 readme = "README.md"
 authors = [{ name = "Laurent Zogaj" }]
