@@ -4,8 +4,6 @@ A blazing-fast HTTP proxy for Python, powered by Go’s [fasthttp](https://githu
 
 ---
 
-> **Powered by [fasthttp](https://github.com/valyala/fasthttp)**
-
 ## Quick Start
 
 1. **Install the package:**

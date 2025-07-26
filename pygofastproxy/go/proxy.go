@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 
@@ -111,6 +112,16 @@ func Proxy(target string, port string) {
 }
 
 func main() {
-	// Example usage:
-	Proxy("http://localhost:4000", "8080")
+	target := os.Getenv("PY_BACKEND_TARGET")
+	port := os.Getenv("PY_BACKEND_PORT")
+
+	if target == "" {
+		log.Fatal("Environment variable PY_BACKEND_TARGET is not set")
+	}
+	if port == "" {
+		log.Fatal("Environment variable PY_BACKEND_PORT is not set")
+	}
+
+	log.Printf("Starting proxy on port %s -> forwarding to %s", port, target)
+	Proxy(target, port)
 }
