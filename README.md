@@ -13,7 +13,7 @@ A blazing-fast HTTP proxy for Python, powered by Go’s [fasthttp](https://githu
 2. **Start your backend server** (e.g., Flask) on port 4000.
 3. **Run the proxy:**
    ```python
-   from pygofastproxy.runner import run_proxy
+   from pygofastproxy import run_proxy
    run_proxy(target="http://localhost:4000", port=8080)
    ```
 4. **Send requests** to `http://localhost:8080`.

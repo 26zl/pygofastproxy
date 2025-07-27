@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
@@ -18,8 +19,36 @@ func Proxy(target string, port string) {
 		log.Fatalf("Invalid target URL: %v", err)
 	}
 
+	// Create fasthttp client with timeout settings.
+	client := &fasthttp.Client{
+		ReadTimeout:         30 * time.Second,
+		WriteTimeout:        30 * time.Second,
+		MaxIdleConnDuration: 10 * time.Second,
+	}
+
 	// Define the HTTP handler function for incoming requests.
 	handler := func(ctx *fasthttp.RequestCtx) {
+		start := time.Now()
+
+		// Add security headers.
+		ctx.Response.Header.Set("X-Proxy-Server", "pygofastproxy")
+		ctx.Response.Header.Set("X-Proxy-Target", target)
+
+		// Handle CORS preflight requests.
+		if string(ctx.Method()) == "OPTIONS" {
+			origin := string(ctx.Request.Header.Peek("Origin"))
+			if origin != "" {
+				ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
+				ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+				ctx.Response.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+				ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
+				ctx.Response.Header.Set("Access-Control-Max-Age", "86400") // 24 hours
+			}
+			ctx.SetStatusCode(fasthttp.StatusOK)
+			log.Printf("CORS preflight request handled in %v", time.Since(start))
+			return
+		}
+
 		// Get the raw requested path.
 		rawPath := string(ctx.Request.URI().PathOriginal())
 
@@ -90,12 +119,12 @@ func Proxy(target string, port string) {
 		req.SetRequestURI(u.String())
 
 		// Perform the request to the backend server.
-		err = fasthttp.Do(req, res)
+		err = client.Do(req, res)
 		if err != nil {
 			// If backend is unreachable or errors out, respond with 502 Bad Gateway.
-			log.Printf("Proxy error: %v", err)
+			log.Printf("Proxy error for %s: %v", u.String(), err)
 			ctx.SetStatusCode(fasthttp.StatusBadGateway)
-			ctx.SetBodyString(`{"error": "proxy failed"}`)
+			ctx.SetBodyString(`{"error": "proxy failed", "details": "backend unreachable"}`)
 			ctx.SetContentType("application/json")
 			return
 		}
@@ -104,6 +133,40 @@ func Proxy(target string, port string) {
 		ctx.SetStatusCode(res.StatusCode())
 		ctx.Response.Header.SetContentType(string(res.Header.ContentType()))
 		ctx.SetBody(res.Body())
+
+		// Forward CORS headers from backend response.
+		if corsOrigin := res.Header.Peek("Access-Control-Allow-Origin"); corsOrigin != nil {
+			ctx.Response.Header.Set("Access-Control-Allow-Origin", string(corsOrigin))
+		}
+		if corsMethods := res.Header.Peek("Access-Control-Allow-Methods"); corsMethods != nil {
+			ctx.Response.Header.Set("Access-Control-Allow-Methods", string(corsMethods))
+		}
+		if corsHeaders := res.Header.Peek("Access-Control-Allow-Headers"); corsHeaders != nil {
+			ctx.Response.Header.Set("Access-Control-Allow-Headers", string(corsHeaders))
+		}
+		if corsCredentials := res.Header.Peek("Access-Control-Allow-Credentials"); corsCredentials != nil {
+			ctx.Response.Header.Set("Access-Control-Allow-Credentials", string(corsCredentials))
+		}
+
+		// If no CORS headers were set by backend, set default ones for localhost.
+		origin := string(ctx.Request.Header.Peek("Origin"))
+		if origin != "" && ctx.Response.Header.Peek("Access-Control-Allow-Origin") == nil {
+			// Allow localhost origins and common development domains.
+			if strings.Contains(origin, "localhost") ||
+				strings.Contains(origin, "127.0.0.1") ||
+				strings.Contains(origin, "herokuapp.com") ||
+				strings.Contains(origin, "vercel.app") {
+				ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
+				ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+				ctx.Response.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+				ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
+			}
+		}
+
+		// Log failed requests (to avoid excessive logging).
+		if res.StatusCode() >= 400 {
+			log.Printf("Proxy request to %s returned %d in %v", cleanPath, res.StatusCode(), time.Since(start))
+		}
 	}
 
 	// Start the server and listen on the given port.

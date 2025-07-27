@@ -1,6 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
+import threading
 
 # Check if Go is installed and available in PATH.
 def check_go_installed():
@@ -19,10 +20,13 @@ def build_proxy(go_dir, binary_path):
     print("Building Go proxy ...")
     result = subprocess.run(
         ["go", "build", "-o", binary_path.name, "proxy.go"],
-        cwd=go_dir
+        cwd=go_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
     )
     if result.returncode != 0:
-        raise RuntimeError("Failed to build Go proxy")
+        raise RuntimeError(f"Failed to build Go proxy:\n{result.stdout}")
 
 # Check if the Go binary is missing or older than the Go source file.
 def is_rebuild_needed(go_file: Path, binary_file: Path) -> bool:
@@ -41,6 +45,10 @@ def run_proxy(target="http://localhost:4000", port=8080):
     binary_path = go_dir / "proxy"
     go_file = go_dir / "proxy.go"
 
+    # Validate that source file exists.
+    if not go_file.exists():
+        raise FileNotFoundError(f"{go_file} does not exist")
+
     # Prepare environment variables to pass backend target and port.
     env = os.environ.copy()
     env["PY_BACKEND_TARGET"] = target
@@ -57,9 +65,9 @@ def run_proxy(target="http://localhost:4000", port=8080):
         [str(binary_path)],
         cwd=go_dir,
         env=env,
-        stdout=subprocess.PIPE,            # Capture stdout
-        stderr=subprocess.STDOUT,         # Merge stderr into stdout
-        text=True                          # Decode output as text
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
     )
 
     # Log output from the proxy process in a background thread.
@@ -67,8 +75,6 @@ def run_proxy(target="http://localhost:4000", port=8080):
         for line in proc.stdout:
             print(f"[proxy] {line.strip()}")
 
-    import threading
     threading.Thread(target=log_output, daemon=True).start()
 
-    # Return the process object to allow caller to manage it.
     return proc
