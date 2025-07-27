@@ -11,6 +11,35 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+// Helper to add CORS headers for specific allowed origins only
+func addCORSHeaders(ctx *fasthttp.RequestCtx) {
+	origin := string(ctx.Request.Header.Peek("Origin"))
+	if origin == "" {
+		return
+	}
+
+	// Retrieve allowed domains from environment variable
+	allowedList := os.Getenv("ALLOWED_ORIGINS")
+	if allowedList == "" {
+		return
+	}
+
+	// Split into comma-separated list and build a map
+	allowedOrigins := make(map[string]bool)
+	for _, o := range strings.Split(allowedList, ",") {
+		allowedOrigins[strings.TrimSpace(o)] = true
+	}
+
+	// Add CORS headers if origin is allowed
+	if allowedOrigins[origin] {
+		ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
+		ctx.Response.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+		ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
+		ctx.Response.Header.Set("Access-Control-Max-Age", "86400")
+	}
+}
+
 // Proxy starts a reverse proxy on the given port and forwards to the given target backend URL.
 func Proxy(target string, port string) {
 	// Parse the target backend URL to ensure it is valid.
@@ -36,16 +65,8 @@ func Proxy(target string, port string) {
 
 		// Handle CORS preflight requests.
 		if string(ctx.Method()) == "OPTIONS" {
-			origin := string(ctx.Request.Header.Peek("Origin"))
-			if origin != "" {
-				ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
-				ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-				ctx.Response.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-				ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
-				ctx.Response.Header.Set("Access-Control-Max-Age", "86400") // 24 hours
-			}
-			ctx.SetStatusCode(fasthttp.StatusOK)
-			log.Printf("CORS preflight request handled in %v", time.Since(start))
+			addCORSHeaders(ctx)
+			ctx.SetStatusCode(204)
 			return
 		}
 
@@ -133,35 +154,15 @@ func Proxy(target string, port string) {
 		ctx.SetStatusCode(res.StatusCode())
 		ctx.Response.Header.SetContentType(string(res.Header.ContentType()))
 		ctx.SetBody(res.Body())
+		addCORSHeaders(ctx)
 
-		// Forward CORS headers from backend response.
-		if corsOrigin := res.Header.Peek("Access-Control-Allow-Origin"); corsOrigin != nil {
-			ctx.Response.Header.Set("Access-Control-Allow-Origin", string(corsOrigin))
-		}
-		if corsMethods := res.Header.Peek("Access-Control-Allow-Methods"); corsMethods != nil {
-			ctx.Response.Header.Set("Access-Control-Allow-Methods", string(corsMethods))
-		}
-		if corsHeaders := res.Header.Peek("Access-Control-Allow-Headers"); corsHeaders != nil {
-			ctx.Response.Header.Set("Access-Control-Allow-Headers", string(corsHeaders))
-		}
-		if corsCredentials := res.Header.Peek("Access-Control-Allow-Credentials"); corsCredentials != nil {
-			ctx.Response.Header.Set("Access-Control-Allow-Credentials", string(corsCredentials))
-		}
+		// Add standard security headers.
+		ctx.Response.Header.Set("Cache-Control", "no-store")
+		ctx.Response.Header.Set("X-Content-Type-Options", "nosniff")
+		ctx.Response.Header.Set("X-Frame-Options", "DENY")
+		ctx.Response.Header.Set("X-XSS-Protection", "1; mode=block")
 
-		// If no CORS headers were set by backend, set default ones for localhost.
-		origin := string(ctx.Request.Header.Peek("Origin"))
-		if origin != "" && ctx.Response.Header.Peek("Access-Control-Allow-Origin") == nil {
-			// Allow localhost origins and common development domains.
-			if strings.Contains(origin, "localhost") ||
-				strings.Contains(origin, "127.0.0.1") ||
-				strings.Contains(origin, "herokuapp.com") ||
-				strings.Contains(origin, "vercel.app") {
-				ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
-				ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-				ctx.Response.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-				ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
-			}
-		}
+		// Forward CORS headers from backend response (removed for strict production CORS handling).
 
 		// Log failed requests (to avoid excessive logging).
 		if res.StatusCode() >= 400 {

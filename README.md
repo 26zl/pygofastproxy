@@ -39,6 +39,7 @@ pygofastproxy is a Python package that provides a super-fast HTTP proxy, powered
 - Simple Python API to launch and control the proxy
 - Automatic Go binary build if not present
 - Easily configurable target and port
+- Optional CORS origin validation using environment variable `ALLOWED_ORIGINS`
 - **Planned:** Pre-built binaries for easier installation (coming soon!)
 - **More features coming soon!**
 
@@ -61,7 +62,7 @@ pip install /path/to/pygofastproxy
 ### As a Python Module
 
 ```python
-from pygofastproxy.runner import run_proxy
+from pygofastproxy import run_proxy
 
 # Start the proxy (forwards :8080 to your backend at :4000)
 run_proxy(target="http://localhost:4000", port=8080)
@@ -70,6 +71,12 @@ run_proxy(target="http://localhost:4000", port=8080)
 - By default, the proxy will listen on `localhost:8080` and forward to your backend at `localhost:4000`.
 - You can adjust the `target` and `port` as needed.
 
+If you're using this in production and want to restrict allowed frontend domains, set the `ALLOWED_ORIGINS` environment variable:
+
+```bash
+export ALLOWED_ORIGINS=https://example.com,https://www.example.com
+```
+
 ---
 
 ## Environment Variables
@@ -77,6 +84,7 @@ run_proxy(target="http://localhost:4000", port=8080)
 You can control the proxy using these environment variables:
 - `PY_BACKEND_TARGET`: The backend server URL to forward requests to (default: `http://localhost:4000`).
 - `PY_BACKEND_PORT`: The port for the proxy to listen on (default: `8080`).
+- `ALLOWED_ORIGINS`: Comma-separated list of allowed CORS origins (optional, used in production for CORS validation).
 
 ---
 
