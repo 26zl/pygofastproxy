@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pygofastproxy"
-version = "1.0.6"
+version = "1.0.7"
 description = "A blazing-fast HTTP proxy for Python, powered by Go’s fasthttp library"
 readme = "README.md"
 authors = [{ name = "Laurent Zogaj" }]
@@ -17,8 +17,12 @@ classifiers = [
 ]
 
 [tool.setuptools]
-packages = ["pygofastproxy"]
-include-package-data = true
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pygofastproxy"]
+exclude = ["pygofastproxy.go"]
 
 [tool.setuptools.package-data]
 pygofastproxy = ["go/*.go", "go/go.mod", "go/go.sum"]

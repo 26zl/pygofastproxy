@@ -1,180 +1,249 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/url"
 	"os"
-	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/valyala/fasthttp"
 )
 
-// Helper to add CORS headers for specific allowed origins only
+//CORS / allowed origins cache
+
+var (
+	allowedOriginsCache map[string]bool
+	allowedOriginsMutex sync.RWMutex
+	allowedOriginsEnv   string
+)
+
+// Initializes the allowed origins cache.
+func initAllowedOrigins() {
+	allowedOriginsMutex.Lock()
+	defer allowedOriginsMutex.Unlock()
+
+	currentEnv := os.Getenv("ALLOWED_ORIGINS")
+	if currentEnv == allowedOriginsEnv && allowedOriginsCache != nil {
+		return
+	}
+
+	allowedOriginsEnv = currentEnv
+	allowedOriginsCache = make(map[string]bool)
+
+	if currentEnv != "" {
+		for _, o := range strings.Split(currentEnv, ",") {
+			allowedOriginsCache[strings.TrimSpace(o)] = true
+		}
+	}
+}
+
+// Adds CORS headers to the response.
 func addCORSHeaders(ctx *fasthttp.RequestCtx) {
 	origin := string(ctx.Request.Header.Peek("Origin"))
 	if origin == "" {
 		return
 	}
-
-	// Retrieve allowed domains from environment variable
-	allowedList := os.Getenv("ALLOWED_ORIGINS")
-	if allowedList == "" {
+	allowedOriginsMutex.RLock()
+	isAllowed := allowedOriginsCache[origin]
+	allowedOriginsMutex.RUnlock()
+	if !isAllowed {
 		return
 	}
+	h := &ctx.Response.Header
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.SetBytesKV([]byte("Access-Control-Allow-Headers"), []byte("Content-Type, Authorization, X-Requested-With"))
+	h.SetBytesKV([]byte("Access-Control-Allow-Methods"), []byte("GET, POST, PUT, DELETE, PATCH, OPTIONS"))
+	h.SetBytesKV([]byte("Access-Control-Allow-Credentials"), []byte("true"))
+	h.SetBytesKV([]byte("Access-Control-Max-Age"), []byte("86400"))
+	h.Add("Vary", "Origin")
+	h.Add("Vary", "Access-Control-Request-Headers")
+	h.Add("Vary", "Access-Control-Request-Method")
+}
 
-	// Split into comma-separated list and build a map
-	allowedOrigins := make(map[string]bool)
-	for _, o := range strings.Split(allowedList, ",") {
-		allowedOrigins[strings.TrimSpace(o)] = true
+// Hop-by-hop headers
+
+var hopByHopHeaders = [...][]byte{
+	[]byte("Connection"),
+	[]byte("Proxy-Connection"),
+	[]byte("Keep-Alive"),
+	[]byte("TE"),
+	[]byte("Trailer"),
+	[]byte("Transfer-Encoding"),
+	[]byte("Upgrade"),
+	[]byte("Proxy-Authenticate"),
+	[]byte("Proxy-Authorization"),
+}
+
+func stripHopByHopReq(h *fasthttp.RequestHeader) {
+	for _, k := range hopByHopHeaders {
+		h.DelBytes(k)
 	}
-
-	// Add CORS headers if origin is allowed
-	if allowedOrigins[origin] {
-		ctx.Response.Header.Set("Access-Control-Allow-Origin", origin)
-		ctx.Response.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-		ctx.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-		ctx.Response.Header.Set("Access-Control-Allow-Credentials", "true")
-		ctx.Response.Header.Set("Access-Control-Max-Age", "86400")
+}
+func stripHopByHopRes(h *fasthttp.ResponseHeader) {
+	for _, k := range hopByHopHeaders {
+		h.DelBytes(k)
 	}
 }
 
 // Proxy starts a reverse proxy on the given port and forwards to the given target backend URL.
 func Proxy(target string, port string) {
-	// Parse the target backend URL to ensure it is valid.
+	config := LoadConfig()
+	initAllowedOrigins()
+
+	var metrics *Metrics
+	if config.EnableMetrics {
+		metrics = NewMetrics()
+	}
+	rateLimiter := NewRateLimiter(config.RateLimitRPS, time.Second)
+
 	backendURL, err := url.Parse(target)
 	if err != nil {
 		log.Fatalf("Invalid target URL: %v", err)
 	}
 
-	// Create fasthttp client with timeout settings.
 	client := &fasthttp.Client{
-		ReadTimeout:         30 * time.Second,
-		WriteTimeout:        30 * time.Second,
-		MaxIdleConnDuration: 10 * time.Second,
+		ReadTimeout:                   config.ReadTimeout,
+		WriteTimeout:                  config.WriteTimeout,
+		MaxIdleConnDuration:           config.MaxIdleConnDuration,
+		MaxConnsPerHost:               config.MaxConnsPerHost,
+		ReadBufferSize:                config.ReadBufferSize,
+		WriteBufferSize:               config.WriteBufferSize,
+		DisableHeaderNamesNormalizing: true,
+		NoDefaultUserAgentHeader:      true,
 	}
 
-	// Define the HTTP handler function for incoming requests.
 	handler := func(ctx *fasthttp.RequestCtx) {
+		// metrics endpoint
+		if config.EnableMetrics && string(ctx.Path()) == "/__proxy_metrics" {
+			reqCount, errCount, avgDuration, uptime := metrics.GetStats()
+			var errRate float64
+			if reqCount > 0 {
+				errRate = float64(errCount) / float64(reqCount) * 100
+			}
+			resp := map[string]any{
+				"requests":        reqCount,
+				"errors":          errCount,
+				"avg_duration_ms": float64(avgDuration) / float64(time.Millisecond),
+				"uptime_seconds":  uptime.Seconds(),
+				"error_rate":      errRate,
+			}
+			b, _ := json.Marshal(resp)
+			ctx.SetContentType("application/json")
+			ctx.SetStatusCode(fasthttp.StatusOK)
+			ctx.SetBody(b)
+			return
+		}
+
 		start := time.Now()
 
-		// Add security headers.
-		ctx.Response.Header.Set("X-Proxy-Server", "pygofastproxy")
-		ctx.Response.Header.Set("X-Proxy-Target", target)
+		// global rate limit
+		if !rateLimiter.Allow() {
+			if config.EnableMetrics {
+				metrics.RecordRequest(time.Since(start), true)
+			}
+			ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
+			ctx.SetContentType("application/json")
+			ctx.SetBodyString(`{"error":"rate limit exceeded"}`)
+			return
+		}
 
-		// Handle CORS preflight requests.
-		if string(ctx.Method()) == "OPTIONS" {
+		// CORS preflight
+		if ctx.IsOptions() {
 			addCORSHeaders(ctx)
-			ctx.SetStatusCode(204)
+			ctx.SetStatusCode(fasthttp.StatusNoContent)
+			ctx.Response.ResetBody()
+			if config.EnableMetrics {
+				metrics.RecordRequest(time.Since(start), false)
+			}
 			return
 		}
 
-		// Get the raw requested path.
-		rawPath := string(ctx.Request.URI().PathOriginal())
-
-		// Reject empty path.
-		if rawPath == "" {
-			ctx.SetStatusCode(fasthttp.StatusBadRequest)
-			ctx.SetBodyString(`{"error": "empty path"}`)
-			ctx.SetContentType("application/json")
-			return
-		}
-
-		// Path must start with a forward slash.
-		if !strings.HasPrefix(rawPath, "/") {
-			ctx.SetStatusCode(fasthttp.StatusBadRequest)
-			ctx.SetBodyString(`{"error": "invalid path prefix"}`)
-			ctx.SetContentType("application/json")
-			return
-		}
-
-		// Decode URL-encoded characters in the path.
-		decodedPath, err := url.PathUnescape(rawPath)
-		if err != nil {
-			ctx.SetStatusCode(fasthttp.StatusBadRequest)
-			ctx.SetBodyString(`{"error": "path decoding failed"}`)
-			ctx.SetContentType("application/json")
-			return
-		}
-
-		// Reject if path contains a NULL byte (potentially malicious).
-		if strings.ContainsRune(decodedPath, '\x00') {
-			ctx.SetStatusCode(fasthttp.StatusBadRequest)
-			ctx.SetBodyString(`{"error": "null byte in path"}`)
-			ctx.SetContentType("application/json")
-			return
-		}
-
-		// Normalize the path (removes redundant slashes and resolves ".." and ".").
-		cleanPath := path.Clean(decodedPath)
-
-		// Forbid directory traversal outside root (defense-in-depth).
-		if strings.HasPrefix(cleanPath, "..") || strings.Contains(cleanPath, "/../") {
-			ctx.SetStatusCode(fasthttp.StatusForbidden)
-			ctx.SetBodyString(`{"error": "path traversal attempt"}`)
-			ctx.SetContentType("application/json")
-			return
-		}
-
-		// Ensure path is still absolute after cleaning.
-		if !strings.HasPrefix(cleanPath, "/") {
-			cleanPath = "/" + cleanPath
-		}
-
-		// Build the full backend URL including path and query string.
+		// Build backend URL from original path and query
 		u := *backendURL
-		u.Path = cleanPath
-		u.RawQuery = string(ctx.URI().QueryString())
+		uri := ctx.URI()
+		u.Path = string(uri.PathOriginal())
+		u.RawQuery = string(uri.QueryString())
 
-		// Prepare proxied request and response objects.
+		// Prepare proxied request and response
 		req := fasthttp.AcquireRequest()
 		res := fasthttp.AcquireResponse()
 		defer fasthttp.ReleaseRequest(req)
 		defer fasthttp.ReleaseResponse(res)
 
-		// Copy the original client request into the proxied request.
+		// Copy original request
 		ctx.Request.CopyTo(req)
 
-		// Set the backend URL we constructed.
-		req.SetRequestURI(u.String())
+		// Strip hop-by-hop on the way to backend
+		stripHopByHopReq(&req.Header)
 
-		// Perform the request to the backend server.
-		err = client.Do(req, res)
-		if err != nil {
-			// If backend is unreachable or errors out, respond with 502 Bad Gateway.
+		// Set scheme/host/URI explicitly to backend
+		req.SetRequestURI(u.String())
+		req.URI().SetScheme(backendURL.Scheme)
+		req.URI().SetHost(backendURL.Host)
+		req.Header.SetHost(backendURL.Host)
+
+		// X-Forwarded-*
+		clientIP := ctx.RemoteIP().String()
+		if xff := req.Header.Peek("X-Forwarded-For"); len(xff) > 0 {
+			req.Header.Set("X-Forwarded-For", string(xff)+", "+clientIP)
+		} else {
+			req.Header.Set("X-Forwarded-For", clientIP)
+		}
+		if ctx.IsTLS() {
+			req.Header.Set("X-Forwarded-Proto", "https")
+		} else {
+			req.Header.Set("X-Forwarded-Proto", "http")
+		}
+		if req.Header.Peek("X-Forwarded-Host") == nil {
+			req.Header.Set("X-Forwarded-Host", string(ctx.Host()))
+		}
+
+		// Do backend call
+		if err := client.Do(req, res); err != nil {
 			log.Printf("Proxy error for %s: %v", u.String(), err)
+			if config.EnableMetrics {
+				metrics.RecordRequest(time.Since(start), true)
+			}
 			ctx.SetStatusCode(fasthttp.StatusBadGateway)
-			ctx.SetBodyString(`{"error": "proxy failed", "details": "backend unreachable"}`)
 			ctx.SetContentType("application/json")
+			ctx.SetBodyString(`{"error":"proxy failed","details":"backend unreachable"}`)
 			return
 		}
 
-		// Forward the backend response to the client.
+		// Copy response headers/status, strip hop-by-hop, then add security/CORS
 		ctx.SetStatusCode(res.StatusCode())
-		ctx.Response.Header.SetContentType(string(res.Header.ContentType()))
-		ctx.SetBody(res.Body())
+		res.Header.CopyTo(&ctx.Response.Header)
+		stripHopByHopRes(&ctx.Response.Header)
+
 		addCORSHeaders(ctx)
+		ctx.Response.Header.SetBytesKV([]byte("Cache-Control"), []byte("no-store"))
+		ctx.Response.Header.SetBytesKV([]byte("X-Content-Type-Options"), []byte("nosniff"))
+		ctx.Response.Header.SetBytesKV([]byte("X-Frame-Options"), []byte("DENY"))
+		ctx.Response.Header.SetBytesKV([]byte("X-XSS-Protection"), []byte("1; mode=block"))
+		ctx.Response.Header.SetBytesKV([]byte("X-Proxy-Server"), []byte("pygofastproxy"))
+		ctx.Response.Header.SetBytesKV([]byte("X-Proxy-Target"), []byte(target))
 
-		// Add standard security headers.
-		ctx.Response.Header.Set("Cache-Control", "no-store")
-		ctx.Response.Header.Set("X-Content-Type-Options", "nosniff")
-		ctx.Response.Header.Set("X-Frame-Options", "DENY")
-		ctx.Response.Header.Set("X-XSS-Protection", "1; mode=block")
+		ctx.SetBody(res.Body())
 
-		// Forward CORS headers from backend response (removed for strict production CORS handling).
-
-		// Log failed requests (to avoid excessive logging).
-		if res.StatusCode() >= 400 {
-			log.Printf("Proxy request to %s returned %d in %v", cleanPath, res.StatusCode(), time.Since(start))
+		// Metrics/logging
+		isError := res.StatusCode() >= 400
+		if config.EnableMetrics {
+			metrics.RecordRequest(time.Since(start), isError)
+		}
+		if isError {
+			log.Printf("Proxy request %s -> %d in %v", u.String(), res.StatusCode(), time.Since(start))
 		}
 	}
 
-	// Start the server and listen on the given port.
-	log.Printf("Fasthttp proxy running at :%s, forwarding to %s\n", port, target)
-	log.Fatal(fasthttp.ListenAndServe(":"+port, handler))
+	addr := ":" + port
+	log.Printf("Fasthttp proxy running at %s, forwarding to %s\n", addr, target)
+	log.Fatal(fasthttp.ListenAndServe(addr, handler))
 }
 
+// Main initializes the proxy server.
 func main() {
 	target := os.Getenv("PY_BACKEND_TARGET")
 	port := os.Getenv("PY_BACKEND_PORT")

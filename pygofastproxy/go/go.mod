@@ -2,7 +2,7 @@ module pygofastproxy
 
 go 1.24
 
-require github.com/valyala/fasthttp v1.64.0
+require github.com/valyala/fasthttp v1.65.0
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect

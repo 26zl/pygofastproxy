@@ -300,4 +300,7 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+buildproject.sh
+cleanup.sh
+
 # End of https://www.toptal.com/developers/gitignore/api/macos,linux,windows,go,python,git,visualstudiocode
