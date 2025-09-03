@@ -101,7 +101,7 @@ export ALLOWED_ORIGINS=https://example.com,https://www.example.com
 
 ---
 
-## 🚀 Performance Configuration
+## Performance Configuration
 
 ### 1. Connection Pooling
 
@@ -187,7 +187,7 @@ run_proxy(
 )
 ```
 
-## 📊 Performance Benchmarks
+## Performance Benchmarks
 
 With these optimizations, you can expect:
 
