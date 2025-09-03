@@ -237,7 +237,7 @@ To manually test the proxy:
 
 ---
 
-## 📈 Monitoring and Troubleshooting
+## Monitoring and Troubleshooting
 
 ### Monitoring
 
