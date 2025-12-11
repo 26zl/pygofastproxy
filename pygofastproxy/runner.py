@@ -2,6 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 import threading
+from urllib.parse import urlparse
 
 # Check if running on Windows.
 def _is_windows() -> bool:
@@ -66,6 +67,20 @@ def is_rebuild_needed(go_dir: Path, binary_file: Path) -> bool:
 
 # Run the Go proxy, rebuilding if needed.
 def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
+    # Validate target URL
+    try:
+        parsed = urlparse(target)
+        if parsed.scheme not in ('http', 'https'):
+            raise ValueError(f"Target must use http or https scheme, got: {target}")
+        if not parsed.netloc:
+            raise ValueError(f"Invalid target URL (missing host): {target}")
+    except Exception as e:
+        raise ValueError(f"Invalid target URL: {e}")
+
+    # Validate port range
+    if not isinstance(port, int) or not (1 <= port <= 65535):
+        raise ValueError(f"Port must be an integer between 1-65535, got: {port}")
+
     # Ensure Go is installed.
     check_go_installed()
 
@@ -92,8 +107,8 @@ def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
         env["PROXY_WRITE_TIMEOUT"] = str(kwargs["write_timeout"])
     if "rate_limit_rps" in kwargs:
         env["PROXY_RATE_LIMIT_RPS"] = str(kwargs["rate_limit_rps"])
-    if "enable_metrics" in kwargs:
-        env["PROXY_ENABLE_METRICS"] = "true" if kwargs["enable_metrics"] else "false"
+    if "max_request_body_size" in kwargs:
+        env["PROXY_MAX_REQUEST_BODY_SIZE"] = str(kwargs["max_request_body_size"])
     if "allowed_origins" in kwargs:
         env["ALLOWED_ORIGINS"] = str(kwargs["allowed_origins"])
 

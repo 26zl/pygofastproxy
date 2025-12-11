@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"net/url"
 	"os"
@@ -93,10 +92,6 @@ func Proxy(target string, port string) {
 	config := LoadConfig()
 	initAllowedOrigins()
 
-	var metrics *Metrics
-	if config.EnableMetrics {
-		metrics = NewMetrics()
-	}
 	rateLimiter := NewRateLimiter(config.RateLimitRPS, time.Second)
 
 	backendURL, err := url.Parse(target)
@@ -111,39 +106,14 @@ func Proxy(target string, port string) {
 		MaxConnsPerHost:               config.MaxConnsPerHost,
 		ReadBufferSize:                config.ReadBufferSize,
 		WriteBufferSize:               config.WriteBufferSize,
+		MaxRequestBodySize:            config.MaxRequestBodySize,
 		DisableHeaderNamesNormalizing: true,
 		NoDefaultUserAgentHeader:      true,
 	}
 
 	handler := func(ctx *fasthttp.RequestCtx) {
-		// metrics endpoint
-		if config.EnableMetrics && string(ctx.Path()) == "/__proxy_metrics" {
-			reqCount, errCount, avgDuration, uptime := metrics.GetStats()
-			var errRate float64
-			if reqCount > 0 {
-				errRate = float64(errCount) / float64(reqCount) * 100
-			}
-			resp := map[string]any{
-				"requests":        reqCount,
-				"errors":          errCount,
-				"avg_duration_ms": float64(avgDuration) / float64(time.Millisecond),
-				"uptime_seconds":  uptime.Seconds(),
-				"error_rate":      errRate,
-			}
-			b, _ := json.Marshal(resp)
-			ctx.SetContentType("application/json")
-			ctx.SetStatusCode(fasthttp.StatusOK)
-			ctx.SetBody(b)
-			return
-		}
-
-		start := time.Now()
-
 		// global rate limit
 		if !rateLimiter.Allow() {
-			if config.EnableMetrics {
-				metrics.RecordRequest(time.Since(start), true)
-			}
 			ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
 			ctx.SetContentType("application/json")
 			ctx.SetBodyString(`{"error":"rate limit exceeded"}`)
@@ -155,9 +125,6 @@ func Proxy(target string, port string) {
 			addCORSHeaders(ctx)
 			ctx.SetStatusCode(fasthttp.StatusNoContent)
 			ctx.Response.ResetBody()
-			if config.EnableMetrics {
-				metrics.RecordRequest(time.Since(start), false)
-			}
 			return
 		}
 
@@ -204,9 +171,6 @@ func Proxy(target string, port string) {
 		// Do backend call
 		if err := client.Do(req, res); err != nil {
 			log.Printf("Proxy error for %s: %v", u.String(), err)
-			if config.EnableMetrics {
-				metrics.RecordRequest(time.Since(start), true)
-			}
 			ctx.SetStatusCode(fasthttp.StatusBadGateway)
 			ctx.SetContentType("application/json")
 			ctx.SetBodyString(`{"error":"proxy failed","details":"backend unreachable"}`)
@@ -227,15 +191,6 @@ func Proxy(target string, port string) {
 		ctx.Response.Header.SetBytesKV([]byte("X-Proxy-Target"), []byte(target))
 
 		ctx.SetBody(res.Body())
-
-		// Metrics/logging
-		isError := res.StatusCode() >= 400
-		if config.EnableMetrics {
-			metrics.RecordRequest(time.Since(start), isError)
-		}
-		if isError {
-			log.Printf("Proxy request %s -> %d in %v", u.String(), res.StatusCode(), time.Since(start))
-		}
 	}
 
 	addr := ":" + port
