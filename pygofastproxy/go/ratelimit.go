@@ -14,11 +14,8 @@ type RateLimiter struct {
 	mutex      sync.Mutex
 }
 
-// NewRateLimiter creates a new RateLimiter
+// NewRateLimiter creates a new RateLimiter. Caller should ensure maxTokens > 0.
 func NewRateLimiter(maxTokens int, refillRate time.Duration) *RateLimiter {
-	if maxTokens <= 0 {
-		maxTokens = 1
-	}
 	return &RateLimiter{
 		tokens:     maxTokens,
 		maxTokens:  maxTokens,

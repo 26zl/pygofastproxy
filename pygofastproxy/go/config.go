@@ -15,7 +15,7 @@ type Config struct {
 	ReadBufferSize      int
 	WriteBufferSize     int
 	RateLimitRPS        int
-	EnableMetrics       bool
+	MaxRequestBodySize  int
 }
 
 // Loads configuration from environment variables with defaults
@@ -28,7 +28,7 @@ func LoadConfig() *Config {
 		ReadBufferSize:      16 * 1024, // 16KB
 		WriteBufferSize:     16 * 1024, // 16KB
 		RateLimitRPS:        1000,
-		EnableMetrics:       true,
+		MaxRequestBodySize:  10 * 1024 * 1024, // 10MB default limit
 	}
 
 	// Override with environment variables
@@ -57,8 +57,10 @@ func LoadConfig() *Config {
 			config.RateLimitRPS = parsed
 		}
 	}
-	if val := os.Getenv("PROXY_ENABLE_METRICS"); val != "" {
-		config.EnableMetrics = val == "true"
+	if val := os.Getenv("PROXY_MAX_REQUEST_BODY_SIZE"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			config.MaxRequestBodySize = parsed
+		}
 	}
 
 	return config

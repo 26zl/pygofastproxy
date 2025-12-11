@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  proxy:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+
+  backend:
+    image: python:3.11-slim
+    working_dir: /srv
+    command: python -m http.server 4000
+    ports:
+      - "4000:4000"

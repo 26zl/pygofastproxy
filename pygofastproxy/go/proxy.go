@@ -1,12 +1,15 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"fmt"
 	"log"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -88,20 +91,52 @@ func stripHopByHopRes(h *fasthttp.ResponseHeader) {
 	}
 }
 
-// Proxy starts a reverse proxy on the given port and forwards to the given target backend URL.
-func Proxy(target string, port string) {
+func validateTarget(target string) (*url.URL, error) {
+	backendURL, err := url.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	if backendURL.Scheme != "http" && backendURL.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported target scheme: %s", backendURL.Scheme)
+	}
+	if backendURL.Host == "" {
+		return nil, fmt.Errorf("target is missing host")
+	}
+	return backendURL, nil
+}
+
+func isBackendReachable(client *fasthttp.Client, backendURL *url.URL, timeout time.Duration) bool {
+	healthURL := *backendURL
+	if healthURL.Path == "" {
+		healthURL.Path = "/"
+	}
+
+	req := fasthttp.AcquireRequest()
+	res := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(res)
+
+	req.SetRequestURI(healthURL.String())
+	req.Header.SetMethod(fasthttp.MethodGet)
+
+	if err := client.DoTimeout(req, res, timeout); err != nil {
+		return false
+	}
+	return true
+}
+
+func newProxyServer(target string) (*fasthttp.Server, error) {
 	config := LoadConfig()
 	initAllowedOrigins()
 
-	var metrics *Metrics
-	if config.EnableMetrics {
-		metrics = NewMetrics()
-	}
-	rateLimiter := NewRateLimiter(config.RateLimitRPS, time.Second)
-
-	backendURL, err := url.Parse(target)
+	backendURL, err := validateTarget(target)
 	if err != nil {
-		log.Fatalf("Invalid target URL: %v", err)
+		return nil, err
+	}
+
+	var rateLimiter *RateLimiter
+	if config.RateLimitRPS > 0 {
+		rateLimiter = NewRateLimiter(config.RateLimitRPS, time.Second)
 	}
 
 	client := &fasthttp.Client{
@@ -112,38 +147,30 @@ func Proxy(target string, port string) {
 		ReadBufferSize:                config.ReadBufferSize,
 		WriteBufferSize:               config.WriteBufferSize,
 		DisableHeaderNamesNormalizing: true,
-		NoDefaultUserAgentHeader:      true,
+			NoDefaultUserAgentHeader:      true,
 	}
 
 	handler := func(ctx *fasthttp.RequestCtx) {
-		// metrics endpoint
-		if config.EnableMetrics && string(ctx.Path()) == "/__proxy_metrics" {
-			reqCount, errCount, avgDuration, uptime := metrics.GetStats()
-			var errRate float64
-			if reqCount > 0 {
-				errRate = float64(errCount) / float64(reqCount) * 100
+		// refresh allow list from env if it changed
+		initAllowedOrigins()
+
+		// lightweight health endpoint
+		if string(ctx.Path()) == "/health" {
+			healthy := isBackendReachable(client, backendURL, 2*time.Second)
+			if !healthy {
+				ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
+				ctx.SetContentType("application/json")
+				ctx.SetBodyString(`{"status":"unhealthy","details":"backend unreachable"}`)
+				return
 			}
-			resp := map[string]any{
-				"requests":        reqCount,
-				"errors":          errCount,
-				"avg_duration_ms": float64(avgDuration) / float64(time.Millisecond),
-				"uptime_seconds":  uptime.Seconds(),
-				"error_rate":      errRate,
-			}
-			b, _ := json.Marshal(resp)
-			ctx.SetContentType("application/json")
 			ctx.SetStatusCode(fasthttp.StatusOK)
-			ctx.SetBody(b)
+			ctx.SetContentType("text/plain")
+			ctx.SetBodyString("ok")
 			return
 		}
 
-		start := time.Now()
-
-		// global rate limit
-		if !rateLimiter.Allow() {
-			if config.EnableMetrics {
-				metrics.RecordRequest(time.Since(start), true)
-			}
+		// global rate limit (skip when disabled)
+		if rateLimiter != nil && !rateLimiter.Allow() {
 			ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
 			ctx.SetContentType("application/json")
 			ctx.SetBodyString(`{"error":"rate limit exceeded"}`)
@@ -155,9 +182,6 @@ func Proxy(target string, port string) {
 			addCORSHeaders(ctx)
 			ctx.SetStatusCode(fasthttp.StatusNoContent)
 			ctx.Response.ResetBody()
-			if config.EnableMetrics {
-				metrics.RecordRequest(time.Since(start), false)
-			}
 			return
 		}
 
@@ -204,9 +228,6 @@ func Proxy(target string, port string) {
 		// Do backend call
 		if err := client.Do(req, res); err != nil {
 			log.Printf("Proxy error for %s: %v", u.String(), err)
-			if config.EnableMetrics {
-				metrics.RecordRequest(time.Since(start), true)
-			}
 			ctx.SetStatusCode(fasthttp.StatusBadGateway)
 			ctx.SetContentType("application/json")
 			ctx.SetBodyString(`{"error":"proxy failed","details":"backend unreachable"}`)
@@ -227,20 +248,43 @@ func Proxy(target string, port string) {
 		ctx.Response.Header.SetBytesKV([]byte("X-Proxy-Target"), []byte(target))
 
 		ctx.SetBody(res.Body())
+	}
 
-		// Metrics/logging
-		isError := res.StatusCode() >= 400
-		if config.EnableMetrics {
-			metrics.RecordRequest(time.Since(start), isError)
-		}
-		if isError {
-			log.Printf("Proxy request %s -> %d in %v", u.String(), res.StatusCode(), time.Since(start))
-		}
+	server := &fasthttp.Server{
+		Handler:            handler,
+		ReadTimeout:        config.ReadTimeout,
+		WriteTimeout:       config.WriteTimeout,
+		MaxRequestBodySize: config.MaxRequestBodySize,
+	}
+
+	return server, nil
+}
+
+// Proxy starts a reverse proxy on the given port and forwards to the given target backend URL.
+func Proxy(target string, port string) {
+	server, err := newProxyServer(target)
+	if err != nil {
+		log.Fatalf("Invalid proxy configuration: %v", err)
 	}
 
 	addr := ":" + port
-	log.Printf("Fasthttp proxy running at %s, forwarding to %s\n", addr, target)
-	log.Fatal(fasthttp.ListenAndServe(addr, handler))
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("Pygofastproxy running at %s, forwarding to %s\n", addr, target)
+		if err := server.ListenAndServe(addr); err != nil {
+			log.Fatalf("Proxy server error: %v", err)
+		}
+	}()
+
+	<-stop
+	log.Printf("Shutdown signal received, stopping proxy...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.ShutdownWithContext(ctx); err != nil {
+		log.Printf("Graceful shutdown error: %v", err)
+	}
 }
 
 // Main initializes the proxy server.
