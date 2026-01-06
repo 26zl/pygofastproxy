@@ -1,5 +1,7 @@
 # pygofastproxy
 
+[![CI](https://github.com/26zl/pygofastproxy/workflows/Upload%20Python%20Package/badge.svg)](https://github.com/26zl/pygofastproxy/actions)
+
 A simple, fast, and secure HTTP reverse proxy for Python, powered by Go's [fasthttp](https://github.com/valyala/fasthttp) library.
 
 
