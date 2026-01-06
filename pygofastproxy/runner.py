@@ -1,7 +1,7 @@
 import os
 import subprocess
-from pathlib import Path
 import threading
+from pathlib import Path
 from urllib.parse import urlparse
 
 # Check if running on Windows.

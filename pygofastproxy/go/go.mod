@@ -1,6 +1,6 @@
 module pygofastproxy
 
-go 1.25.5
+go 1.25
 
 require github.com/valyala/fasthttp v1.69.0
 

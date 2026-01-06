@@ -7,12 +7,6 @@ services:
       - .env
     ports:
       - "8080:8080"
-    depends_on:
-      - backend
-
-  backend:
-    image: python:3.11-slim
-    working_dir: /srv
-    command: python -m http.server 4000
-    ports:
-      - "4000:4000"
+    environment:
+      - PY_BACKEND_TARGET=${PY_BACKEND_TARGET:-http://host.docker.internal:4000}
+      - PY_BACKEND_PORT=${PY_BACKEND_PORT:-8080}
