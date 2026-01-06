@@ -23,6 +23,8 @@
 *.dll
 *.so
 *.dylib
+# Go proxy binary (Linux/Unix)
+pygofastproxy/go/proxy
 
 # Test binary, built with `go test -c`
 *.test
@@ -303,4 +305,11 @@ $RECYCLE.BIN/
 buildproject.sh
 cleanup.sh
 
+.cursorignore
+
 # End of https://www.toptal.com/developers/gitignore/api/macos,linux,windows,go,python,git,visualstudiocode
+# Snyk Security Extension - AI Rules (auto-generated)
+.cursor/rules/snyk_rules.mdc
+
+# Snyk Security Extension - AI Rules (auto-generated)
+.github/instructions/snyk_rules.instructions.md
