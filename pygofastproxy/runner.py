@@ -4,13 +4,16 @@ import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
+
 # Check if running on Windows.
 def _is_windows() -> bool:
     return os.name == "nt"
 
+
 # Return executable name, appending .exe on Windows.
 def _bin_name(base: str) -> str:
     return f"{base}.exe" if _is_windows() else base
+
 
 # Check if Go is installed and available in PATH.
 def check_go_installed():
@@ -24,6 +27,7 @@ def check_go_installed():
     except Exception as e:
         raise RuntimeError("Go is not installed or not found in PATH.") from e
 
+
 # Build the Go proxy binary from source.
 def build_proxy(go_dir: Path, binary_path: Path):
     print("Building Go proxy ...")
@@ -31,24 +35,24 @@ def build_proxy(go_dir: Path, binary_path: Path):
         raise FileNotFoundError(f"Missing go.mod in {go_dir}")
 
     cmd = [
-        "go", "build",
+        "go",
+        "build",
         "-trimpath",
-        "-ldflags", "-s -w",
-        "-o", binary_path.name,
+        "-ldflags",
+        "-s -w",
+        "-o",
+        binary_path.name,
         ".",
     ]
     result = subprocess.run(
-        cmd,
-        cwd=go_dir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
+        cmd, cwd=go_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to build Go proxy:\n{result.stdout}")
 
     if not _is_windows():
         binary_path.chmod(0o755)
+
 
 # Check if the Go binary is missing or older than source files.
 def is_rebuild_needed(go_dir: Path, binary_file: Path) -> bool:
@@ -65,12 +69,13 @@ def is_rebuild_needed(go_dir: Path, binary_file: Path) -> bool:
             return True
     return False
 
+
 # Run the Go proxy, rebuilding if needed.
 def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
     # Validate target URL
     try:
         parsed = urlparse(target)
-        if parsed.scheme not in ('http', 'https'):
+        if parsed.scheme not in ("http", "https"):
             raise ValueError(f"Target must use http or https scheme, got: {target}")
         if not parsed.netloc:
             raise ValueError(f"Invalid target URL (missing host): {target}")
@@ -116,7 +121,8 @@ def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
     if "tls_key_file" in kwargs:
         env["PROXY_TLS_KEY_FILE"] = str(kwargs["tls_key_file"])
     if "cors_allow_credentials" in kwargs:
-        env["PROXY_CORS_ALLOW_CREDENTIALS"] = str(kwargs["cors_allow_credentials"]).lower()
+        val = str(kwargs["cors_allow_credentials"]).lower()
+        env["PROXY_CORS_ALLOW_CREDENTIALS"] = val
 
     print(f"Starting Go proxy at http://localhost:{port} -> {target}")
 
@@ -127,7 +133,7 @@ def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True
+        text=True,
     )
 
     # Log output from the proxy process in a background thread.

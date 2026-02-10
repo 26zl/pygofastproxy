@@ -21,9 +21,7 @@ class _BackendHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(
-            b'{"method":"GET","path":"' + self.path.encode() + b'"}'
-        )
+        self.wfile.write(b'{"method":"GET","path":"' + self.path.encode() + b'"}')
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))

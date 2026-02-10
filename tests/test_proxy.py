@@ -5,7 +5,6 @@ import requests
 
 from pygofastproxy.runner import run_proxy
 
-
 # ---------------------------------------------------------------------------
 # Basic proxy forwarding
 # ---------------------------------------------------------------------------
@@ -218,4 +217,4 @@ class TestConfigValidation:
 
     def test_port_not_int_raises(self):
         with pytest.raises(ValueError, match="Port"):
-            run_proxy(target="http://localhost:4000", port="abc")
+            run_proxy(target="http://localhost:4000", port="abc")  # type: ignore[arg-type]

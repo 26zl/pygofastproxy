@@ -1,6 +1,8 @@
 """CLI entry point for pygofastproxy."""
+
 import os
 import sys
+
 from .runner import run_proxy
 
 

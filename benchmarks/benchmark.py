@@ -61,7 +61,7 @@ def run_benchmark(total_requests: int, concurrency: int):
     url = f"http://127.0.0.1:{proxy_port}/bench"
 
     # Warmup
-    print(f"Warming up with 200 requests...")
+    print("Warming up with 200 requests...")
     for _ in range(200):
         try:
             urllib.request.urlopen(url, timeout=5)
@@ -69,9 +69,7 @@ def run_benchmark(total_requests: int, concurrency: int):
             pass
 
     # Benchmark
-    print(
-        f"Benchmarking: {total_requests} requests, {concurrency} concurrent..."
-    )
+    print(f"Benchmarking: {total_requests} requests, {concurrency} concurrent...")
     successes = 0
     errors = 0
 
@@ -116,10 +114,18 @@ def run_benchmark(total_requests: int, concurrency: int):
 def main():
     parser = argparse.ArgumentParser(description="Benchmark pygofastproxy")
     parser.add_argument(
-        "-n", "--requests", type=int, default=10000, help="Total requests (default: 10000)"
+        "-n",
+        "--requests",
+        type=int,
+        default=10000,
+        help="Total requests (default: 10000)",
     )
     parser.add_argument(
-        "-c", "--concurrency", type=int, default=50, help="Concurrent workers (default: 50)"
+        "-c",
+        "--concurrency",
+        type=int,
+        default=50,
+        help="Concurrent workers (default: 50)",
     )
     args = parser.parse_args()
     run_benchmark(args.requests, args.concurrency)

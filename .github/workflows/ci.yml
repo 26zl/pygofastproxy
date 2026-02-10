@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -24,7 +27,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.7'
+          cache-dependency-path: pygofastproxy/go/go.sum
 
       - name: Install package with test dependencies
         run: pip install -e ".[test]"

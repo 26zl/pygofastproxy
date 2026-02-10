@@ -76,7 +76,7 @@ def test_basic_proxy():
             # Test health endpoint
             health = requests.get(f"{base}/health", timeout=2)
             assert health.status_code == 200
-            
+
             # Test security headers
             assert "X-Content-Type-Options" in res.headers
             assert "X-Frame-Options" in res.headers

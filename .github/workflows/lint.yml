@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   python-lint:
     runs-on: ubuntu-latest
@@ -32,7 +35,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.7'
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
