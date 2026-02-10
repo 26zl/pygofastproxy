@@ -1,28 +1,24 @@
+# Stage 1: Build Go binary
+FROM golang:1.25-bookworm AS go-builder
+
+WORKDIR /build
+COPY pygofastproxy/go/ .
+RUN go build -trimpath -ldflags="-s -w" -o proxy .
+
+# Stage 2: Runtime
 FROM python:3.11-slim
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install Go 1.25.5
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget ca-certificates && \
-    wget -q https://go.dev/dl/go1.25.5.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz && \
-    rm go1.25.5.linux-amd64.tar.gz && \
-    apt-get remove -y wget && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
-
-ENV PATH="/usr/local/go/bin:${PATH}"
 
 WORKDIR /app
 
 COPY . /app
+COPY --from=go-builder /build/proxy /app/pygofastproxy/go/proxy
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir . && \
+    chmod 755 /app/pygofastproxy/go/proxy && \
+    useradd -r -s /bin/false proxyuser
 
-# Prebuild the Go proxy binary inside the image
-RUN cd pygofastproxy/go && go build -o proxy .
+USER proxyuser
 
 ENV PY_BACKEND_TARGET=http://localhost:4000
 ENV PY_BACKEND_PORT=8080

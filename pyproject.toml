@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pygofastproxy"
-version = "1.0.8"
+version = "1.1.0"
 description = "A blazing-fast HTTP proxy for Python, powered by Go’s fasthttp library"
 readme = "README.md"
 authors = [{ name = "Laurent Zogaj" }]
@@ -27,8 +27,22 @@ exclude = ["pygofastproxy.go"]
 [tool.setuptools.package-data]
 pygofastproxy = ["go/*.go", "go/go.mod", "go/go.sum"]
 
+[project.optional-dependencies]
+test = ["pytest>=7.0", "requests>=2.20"]
+
 [project.scripts]
 pygofastproxy = "pygofastproxy.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/26zl/pygofastproxy"
+Repository = "https://github.com/26zl/pygofastproxy"
+Issues = "https://github.com/26zl/pygofastproxy/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

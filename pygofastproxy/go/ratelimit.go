@@ -5,49 +5,67 @@ import (
 	"time"
 )
 
-// Simple token-bucket rate limiter
-type RateLimiter struct {
-	tokens     int
-	maxTokens  int
-	refillRate time.Duration
+// bucket holds per-key token state.
+type bucket struct {
+	tokens     float64
 	lastRefill time.Time
-	mutex      sync.Mutex
+	mu         sync.Mutex
 }
 
-// NewRateLimiter creates a new RateLimiter. Caller should ensure maxTokens > 0.
-func NewRateLimiter(maxTokens int, refillRate time.Duration) *RateLimiter {
+// RateLimiter implements per-key token bucket rate limiting.
+// The configured RPS value is both the sustained rate and the burst size.
+type RateLimiter struct {
+	rps      int
+	maxBurst int
+	buckets  sync.Map // string -> *bucket
+}
+
+// NewRateLimiter creates a per-key rate limiter where rps is the sustained
+// requests-per-second rate and also the burst size (1 second of tokens).
+func NewRateLimiter(rps int) *RateLimiter {
 	return &RateLimiter{
-		tokens:     maxTokens,
-		maxTokens:  maxTokens,
-		refillRate: refillRate,
-		lastRefill: time.Now(),
+		rps:      rps,
+		maxBurst: rps,
 	}
 }
 
-// Allow checks if a token can be consumed from the bucket
-func (rl *RateLimiter) Allow() bool {
-	rl.mutex.Lock()
-	defer rl.mutex.Unlock()
-
+// Allow checks if a request from the given key should be allowed.
+func (rl *RateLimiter) Allow(key string) bool {
 	now := time.Now()
-	elapsed := now.Sub(rl.lastRefill)
+	val, _ := rl.buckets.LoadOrStore(key, &bucket{
+		tokens:     float64(rl.maxBurst),
+		lastRefill: now,
+	})
+	b := val.(*bucket)
 
-	if elapsed >= rl.refillRate {
-		tokensToAdd := int(elapsed / rl.refillRate)
-		rl.tokens = min(rl.maxTokens, rl.tokens+tokensToAdd)
-		rl.lastRefill = rl.lastRefill.Add(time.Duration(tokensToAdd) * rl.refillRate)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	elapsed := now.Sub(b.lastRefill)
+	if elapsed > 0 {
+		tokensToAdd := elapsed.Seconds() * float64(rl.rps)
+		b.tokens = min(float64(rl.maxBurst), b.tokens+tokensToAdd)
+		b.lastRefill = now
 	}
 
-	if rl.tokens > 0 {
-		rl.tokens--
+	if b.tokens >= 1.0 {
+		b.tokens -= 1.0
 		return true
 	}
 	return false
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+// Cleanup removes stale buckets that haven't been used in 5 minutes.
+func (rl *RateLimiter) Cleanup() {
+	threshold := time.Now().Add(-5 * time.Minute)
+	rl.buckets.Range(func(key, value any) bool {
+		b := value.(*bucket)
+		b.mu.Lock()
+		stale := b.lastRefill.Before(threshold)
+		b.mu.Unlock()
+		if stale {
+			rl.buckets.Delete(key)
+		}
+		return true
+	})
 }

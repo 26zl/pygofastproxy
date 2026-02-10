@@ -18,13 +18,21 @@ def main():
         kwargs["read_timeout"] = read_timeout
     if write_timeout := os.getenv("PROXY_WRITE_TIMEOUT"):
         kwargs["write_timeout"] = write_timeout
+    if max_idle := os.getenv("PROXY_MAX_IDLE_CONN_DURATION"):
+        kwargs["max_idle_conn_duration"] = max_idle
     if rate_limit := os.getenv("PROXY_RATE_LIMIT_RPS"):
         kwargs["rate_limit_rps"] = int(rate_limit)
     if max_body := os.getenv("PROXY_MAX_REQUEST_BODY_SIZE"):
         kwargs["max_request_body_size"] = int(max_body)
     if origins := os.getenv("ALLOWED_ORIGINS"):
         kwargs["allowed_origins"] = origins
-    
+    if tls_cert := os.getenv("PROXY_TLS_CERT_FILE"):
+        kwargs["tls_cert_file"] = tls_cert
+    if tls_key := os.getenv("PROXY_TLS_KEY_FILE"):
+        kwargs["tls_key_file"] = tls_key
+    if cors_creds := os.getenv("PROXY_CORS_ALLOW_CREDENTIALS"):
+        kwargs["cors_allow_credentials"] = cors_creds
+
     proc = None
     try:
         proc = run_proxy(target=target, port=port, **kwargs)

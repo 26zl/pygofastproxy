@@ -1,30 +1,66 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/valyala/fasthttp"
 )
 
-//CORS / allowed origins cache
+// Pre-allocated byte slices for headers (avoid per-request allocations)
+var (
+	healthPath = []byte("/health")
 
+	// CORS header names
+	hdrACAllowOrigin  = []byte("Access-Control-Allow-Origin")
+	hdrACAllowHeaders = []byte("Access-Control-Allow-Headers")
+	hdrACAllowMethods = []byte("Access-Control-Allow-Methods")
+	hdrACAllowCreds   = []byte("Access-Control-Allow-Credentials")
+	hdrACMaxAge       = []byte("Access-Control-Max-Age")
+
+	// CORS header values
+	valCORSHeaders = []byte("Content-Type, Authorization, X-Requested-With")
+	valCORSMethods = []byte("GET, POST, PUT, DELETE, PATCH, OPTIONS")
+	valCORSMaxAge  = []byte("86400")
+	valTrue        = []byte("true")
+
+	// Security header names and values
+	hdrCacheControl = []byte("Cache-Control")
+	valNoStore      = []byte("no-store")
+	hdrXContentType = []byte("X-Content-Type-Options")
+	valNosniff      = []byte("nosniff")
+	hdrXFrame       = []byte("X-Frame-Options")
+	valDeny         = []byte("DENY")
+	hdrXXSS        = []byte("X-XSS-Protection")
+	valXXSSBlock   = []byte("1; mode=block")
+
+	// Vary header
+	hdrVary        = []byte("Vary")
+	valVaryOrigin  = []byte("Origin")
+	valVaryHeaders = []byte("Access-Control-Request-Headers")
+	valVaryMethod  = []byte("Access-Control-Request-Method")
+)
+
+// CORS allowed origins cache
 var (
 	allowedOriginsCache map[string]bool
 	allowedOriginsMutex sync.RWMutex
 	allowedOriginsEnv   string
+	corsAllowCreds      bool
 )
 
-// Initializes the allowed origins cache.
-func initAllowedOrigins() {
+func initAllowedOrigins(allowCredentials bool) {
 	allowedOriginsMutex.Lock()
 	defer allowedOriginsMutex.Unlock()
 
@@ -34,40 +70,63 @@ func initAllowedOrigins() {
 	}
 
 	allowedOriginsEnv = currentEnv
+	corsAllowCreds = allowCredentials
 	allowedOriginsCache = make(map[string]bool)
 
 	if currentEnv != "" {
 		for _, o := range strings.Split(currentEnv, ",") {
-			allowedOriginsCache[strings.TrimSpace(o)] = true
+			origin := strings.TrimSpace(o)
+			if origin != "" && origin != "null" {
+				allowedOriginsCache[origin] = true
+			}
 		}
 	}
 }
 
-// Adds CORS headers to the response.
+// Refreshes allowed origins periodically instead of on every request.
+func startOriginsRefresh(allowCredentials bool, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			initAllowedOrigins(allowCredentials)
+		}
+	}()
+}
+
 func addCORSHeaders(ctx *fasthttp.RequestCtx) {
-	origin := string(ctx.Request.Header.Peek("Origin"))
-	if origin == "" {
+	origin := ctx.Request.Header.PeekBytes(hdrACAllowOrigin)
+	if len(origin) == 0 {
+		origin = ctx.Request.Header.Peek("Origin")
+	}
+	if len(origin) == 0 {
 		return
 	}
+	originStr := string(origin)
+
 	allowedOriginsMutex.RLock()
-	isAllowed := allowedOriginsCache[origin]
+	isAllowed := allowedOriginsCache[originStr]
+	creds := corsAllowCreds
 	allowedOriginsMutex.RUnlock()
+
 	if !isAllowed {
 		return
 	}
+
 	h := &ctx.Response.Header
-	h.Set("Access-Control-Allow-Origin", origin)
-	h.SetBytesKV([]byte("Access-Control-Allow-Headers"), []byte("Content-Type, Authorization, X-Requested-With"))
-	h.SetBytesKV([]byte("Access-Control-Allow-Methods"), []byte("GET, POST, PUT, DELETE, PATCH, OPTIONS"))
-	h.SetBytesKV([]byte("Access-Control-Allow-Credentials"), []byte("true"))
-	h.SetBytesKV([]byte("Access-Control-Max-Age"), []byte("86400"))
-	h.Add("Vary", "Origin")
-	h.Add("Vary", "Access-Control-Request-Headers")
-	h.Add("Vary", "Access-Control-Request-Method")
+	h.SetBytesKV(hdrACAllowOrigin, origin)
+	h.SetBytesKV(hdrACAllowHeaders, valCORSHeaders)
+	h.SetBytesKV(hdrACAllowMethods, valCORSMethods)
+	h.SetBytesKV(hdrACMaxAge, valCORSMaxAge)
+	if creds {
+		h.SetBytesKV(hdrACAllowCreds, valTrue)
+	}
+	h.AddBytesKV(hdrVary, valVaryOrigin)
+	h.AddBytesKV(hdrVary, valVaryHeaders)
+	h.AddBytesKV(hdrVary, valVaryMethod)
 }
 
-// Hop-by-hop headers
-
+// Hop-by-hop headers (RFC 7230 Section 6.1)
 var hopByHopHeaders = [...][]byte{
 	[]byte("Connection"),
 	[]byte("Proxy-Connection"),
@@ -80,15 +139,54 @@ var hopByHopHeaders = [...][]byte{
 	[]byte("Proxy-Authorization"),
 }
 
+var connectionHeader = []byte("Connection")
+
+// Strips hop-by-hop headers including dynamic ones listed in the Connection header.
 func stripHopByHopReq(h *fasthttp.RequestHeader) {
+	if conn := h.PeekBytes(connectionHeader); len(conn) > 0 {
+		for _, name := range strings.Split(string(conn), ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				h.Del(name)
+			}
+		}
+	}
 	for _, k := range hopByHopHeaders {
 		h.DelBytes(k)
 	}
 }
+
 func stripHopByHopRes(h *fasthttp.ResponseHeader) {
+	if conn := h.PeekBytes(connectionHeader); len(conn) > 0 {
+		for _, name := range strings.Split(string(conn), ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				h.Del(name)
+			}
+		}
+	}
 	for _, k := range hopByHopHeaders {
 		h.DelBytes(k)
 	}
+}
+
+// isPrivateHost checks if a host string is a private/loopback/link-local address.
+func isPrivateHost(host string) bool {
+	h := host
+	if idx := strings.LastIndex(h, ":"); idx != -1 {
+		h = h[:idx]
+	}
+	h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
 func validateTarget(target string) (*url.URL, error) {
@@ -102,10 +200,25 @@ func validateTarget(target string) (*url.URL, error) {
 	if backendURL.Host == "" {
 		return nil, fmt.Errorf("target is missing host")
 	}
+	if isPrivateHost(backendURL.Host) {
+		log.Printf("WARNING: target %q resolves to a private/loopback address. This is expected for local development but should not be used in production.", backendURL.Host)
+	}
 	return backendURL, nil
 }
 
+// Health check caching
+var (
+	healthCacheOK   atomic.Bool
+	healthCacheTime atomic.Int64 // unix nanoseconds
+)
+
+const healthCacheTTL = 5 * time.Second
+
 func isBackendReachable(client *fasthttp.Client, backendURL *url.URL, timeout time.Duration) bool {
+	if time.Since(time.Unix(0, healthCacheTime.Load())) < healthCacheTTL {
+		return healthCacheOK.Load()
+	}
+
 	healthURL := *backendURL
 	if healthURL.Path == "" {
 		healthURL.Path = "/"
@@ -119,15 +232,15 @@ func isBackendReachable(client *fasthttp.Client, backendURL *url.URL, timeout ti
 	req.SetRequestURI(healthURL.String())
 	req.Header.SetMethod(fasthttp.MethodGet)
 
-	if err := client.DoTimeout(req, res, timeout); err != nil {
-		return false
-	}
-	return true
+	ok := client.DoTimeout(req, res, timeout) == nil
+	healthCacheOK.Store(ok)
+	healthCacheTime.Store(time.Now().UnixNano())
+	return ok
 }
 
-func newProxyServer(target string) (*fasthttp.Server, error) {
-	config := LoadConfig()
-	initAllowedOrigins()
+func newProxyServer(target string, config *Config) (*fasthttp.Server, error) {
+	initAllowedOrigins(config.CORSAllowCredentials)
+	startOriginsRefresh(config.CORSAllowCredentials, 30*time.Second)
 
 	backendURL, err := validateTarget(target)
 	if err != nil {
@@ -136,7 +249,14 @@ func newProxyServer(target string) (*fasthttp.Server, error) {
 
 	var rateLimiter *RateLimiter
 	if config.RateLimitRPS > 0 {
-		rateLimiter = NewRateLimiter(config.RateLimitRPS, time.Second)
+		rateLimiter = NewRateLimiter(config.RateLimitRPS)
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				rateLimiter.Cleanup()
+			}
+		}()
 	}
 
 	client := &fasthttp.Client{
@@ -144,18 +264,24 @@ func newProxyServer(target string) (*fasthttp.Server, error) {
 		WriteTimeout:                  config.WriteTimeout,
 		MaxIdleConnDuration:           config.MaxIdleConnDuration,
 		MaxConnsPerHost:               config.MaxConnsPerHost,
+		MaxConnWaitTimeout:            config.MaxConnWaitTimeout,
 		ReadBufferSize:                config.ReadBufferSize,
 		WriteBufferSize:               config.WriteBufferSize,
 		DisableHeaderNamesNormalizing: true,
-			NoDefaultUserAgentHeader:      true,
+		NoDefaultUserAgentHeader:      true,
 	}
 
 	handler := func(ctx *fasthttp.RequestCtx) {
-		// refresh allow list from env if it changed
-		initAllowedOrigins()
+		clientIP := ctx.RemoteIP().String()
 
-		// lightweight health endpoint
-		if string(ctx.Path()) == "/health" {
+		// Health endpoint (rate-limited + cached)
+		if bytes.Equal(ctx.Path(), healthPath) {
+			if rateLimiter != nil && !rateLimiter.Allow(clientIP) {
+				ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
+				ctx.SetContentType("application/json")
+				ctx.SetBodyString(`{"error":"rate limit exceeded"}`)
+				return
+			}
 			healthy := isBackendReachable(client, backendURL, 2*time.Second)
 			if !healthy {
 				ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
@@ -169,8 +295,8 @@ func newProxyServer(target string) (*fasthttp.Server, error) {
 			return
 		}
 
-		// global rate limit (skip when disabled)
-		if rateLimiter != nil && !rateLimiter.Allow() {
+		// Per-IP rate limit
+		if rateLimiter != nil && !rateLimiter.Allow(clientIP) {
 			ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
 			ctx.SetContentType("application/json")
 			ctx.SetBodyString(`{"error":"rate limit exceeded"}`)
@@ -197,55 +323,45 @@ func newProxyServer(target string) (*fasthttp.Server, error) {
 		defer fasthttp.ReleaseRequest(req)
 		defer fasthttp.ReleaseResponse(res)
 
-		// Copy original request
 		ctx.Request.CopyTo(req)
-
-		// Strip hop-by-hop on the way to backend
 		stripHopByHopReq(&req.Header)
 
-		// Set scheme/host/URI explicitly to backend
 		req.SetRequestURI(u.String())
 		req.URI().SetScheme(backendURL.Scheme)
 		req.URI().SetHost(backendURL.Host)
 		req.Header.SetHost(backendURL.Host)
 
-		// X-Forwarded-*
-		clientIP := ctx.RemoteIP().String()
-		if xff := req.Header.Peek("X-Forwarded-For"); len(xff) > 0 {
-			req.Header.Set("X-Forwarded-For", string(xff)+", "+clientIP)
-		} else {
-			req.Header.Set("X-Forwarded-For", clientIP)
-		}
+		// X-Forwarded-* (always overwrite to prevent spoofing)
+		req.Header.Set("X-Forwarded-For", clientIP)
 		if ctx.IsTLS() {
 			req.Header.Set("X-Forwarded-Proto", "https")
 		} else {
 			req.Header.Set("X-Forwarded-Proto", "http")
 		}
-		if req.Header.Peek("X-Forwarded-Host") == nil {
-			req.Header.Set("X-Forwarded-Host", string(ctx.Host()))
-		}
+		req.Header.Set("X-Forwarded-Host", string(ctx.Host()))
 
-		// Do backend call
 		if err := client.Do(req, res); err != nil {
-			log.Printf("Proxy error for %s: %v", u.String(), err)
+			log.Printf("Proxy error: %v", err)
 			ctx.SetStatusCode(fasthttp.StatusBadGateway)
 			ctx.SetContentType("application/json")
-			ctx.SetBodyString(`{"error":"proxy failed","details":"backend unreachable"}`)
+			ctx.SetBodyString(`{"error":"backend unreachable"}`)
 			return
 		}
 
-		// Copy response headers/status, strip hop-by-hop, then add security/CORS
+		// Copy response
 		ctx.SetStatusCode(res.StatusCode())
 		res.Header.CopyTo(&ctx.Response.Header)
 		stripHopByHopRes(&ctx.Response.Header)
 
 		addCORSHeaders(ctx)
-		ctx.Response.Header.SetBytesKV([]byte("Cache-Control"), []byte("no-store"))
-		ctx.Response.Header.SetBytesKV([]byte("X-Content-Type-Options"), []byte("nosniff"))
-		ctx.Response.Header.SetBytesKV([]byte("X-Frame-Options"), []byte("DENY"))
-		ctx.Response.Header.SetBytesKV([]byte("X-XSS-Protection"), []byte("1; mode=block"))
-		ctx.Response.Header.SetBytesKV([]byte("X-Proxy-Server"), []byte("pygofastproxy"))
-		ctx.Response.Header.SetBytesKV([]byte("X-Proxy-Target"), []byte(target))
+
+		// Security headers (only set Cache-Control if backend didn't)
+		if len(ctx.Response.Header.PeekBytes(hdrCacheControl)) == 0 {
+			ctx.Response.Header.SetBytesKV(hdrCacheControl, valNoStore)
+		}
+		ctx.Response.Header.SetBytesKV(hdrXContentType, valNosniff)
+		ctx.Response.Header.SetBytesKV(hdrXFrame, valDeny)
+		ctx.Response.Header.SetBytesKV(hdrXXSS, valXXSSBlock)
 
 		ctx.SetBody(res.Body())
 	}
@@ -260,9 +376,8 @@ func newProxyServer(target string) (*fasthttp.Server, error) {
 	return server, nil
 }
 
-// Proxy starts a reverse proxy on the given port and forwards to the given target backend URL.
-func Proxy(target string, port string) {
-	server, err := newProxyServer(target)
+func proxy(target string, port string, config *Config) {
+	server, err := newProxyServer(target, config)
 	if err != nil {
 		log.Fatalf("Invalid proxy configuration: %v", err)
 	}
@@ -272,9 +387,16 @@ func Proxy(target string, port string) {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		log.Printf("Pygofastproxy running at %s, forwarding to %s\n", addr, target)
-		if err := server.ListenAndServe(addr); err != nil {
-			log.Fatalf("Proxy server error: %v", err)
+		log.Printf("Pygofastproxy running at %s, forwarding to backend", addr)
+		if config.TLSCertFile != "" && config.TLSKeyFile != "" {
+			log.Printf("TLS enabled")
+			if err := server.ListenAndServeTLS(addr, config.TLSCertFile, config.TLSKeyFile); err != nil {
+				log.Fatalf("Proxy server error: %v", err)
+			}
+		} else {
+			if err := server.ListenAndServe(addr); err != nil {
+				log.Fatalf("Proxy server error: %v", err)
+			}
 		}
 	}()
 
@@ -287,7 +409,6 @@ func Proxy(target string, port string) {
 	}
 }
 
-// Main initializes the proxy server.
 func main() {
 	target := os.Getenv("PY_BACKEND_TARGET")
 	port := os.Getenv("PY_BACKEND_PORT")
@@ -299,6 +420,13 @@ func main() {
 		log.Fatal("Environment variable PY_BACKEND_PORT is not set")
 	}
 
-	log.Printf("Starting proxy on port %s -> forwarding to %s", port, target)
-	Proxy(target, port)
+	for _, c := range port {
+		if c < '0' || c > '9' {
+			log.Fatalf("Invalid port: %s (must be numeric)", port)
+		}
+	}
+
+	config := LoadConfig()
+	log.Printf("Starting proxy on port %s", port)
+	proxy(target, port, config)
 }

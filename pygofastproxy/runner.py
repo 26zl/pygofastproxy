@@ -81,17 +81,15 @@ def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
     if not isinstance(port, int) or not (1 <= port <= 65535):
         raise ValueError(f"Port must be an integer between 1-65535, got: {port}")
 
-    # Ensure Go is installed.
-    check_go_installed()
-
     # Define paths to Go directory and binary.
     go_dir = (Path(__file__).parent / "go").resolve()
     if not go_dir.exists():
         raise FileNotFoundError(f"{go_dir} does not exist")
     binary_path = (go_dir / _bin_name("proxy")).resolve()
 
-    # Rebuild if missing or outdated.
+    # Only check for Go and rebuild if needed.
     if is_rebuild_needed(go_dir, binary_path):
+        check_go_installed()
         build_proxy(go_dir, binary_path)
 
     # Prepare environment variables for proxy configuration.
@@ -105,12 +103,20 @@ def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
         env["PROXY_READ_TIMEOUT"] = str(kwargs["read_timeout"])
     if "write_timeout" in kwargs:
         env["PROXY_WRITE_TIMEOUT"] = str(kwargs["write_timeout"])
+    if "max_idle_conn_duration" in kwargs:
+        env["PROXY_MAX_IDLE_CONN_DURATION"] = str(kwargs["max_idle_conn_duration"])
     if "rate_limit_rps" in kwargs:
         env["PROXY_RATE_LIMIT_RPS"] = str(kwargs["rate_limit_rps"])
     if "max_request_body_size" in kwargs:
         env["PROXY_MAX_REQUEST_BODY_SIZE"] = str(kwargs["max_request_body_size"])
     if "allowed_origins" in kwargs:
         env["ALLOWED_ORIGINS"] = str(kwargs["allowed_origins"])
+    if "tls_cert_file" in kwargs:
+        env["PROXY_TLS_CERT_FILE"] = str(kwargs["tls_cert_file"])
+    if "tls_key_file" in kwargs:
+        env["PROXY_TLS_KEY_FILE"] = str(kwargs["tls_key_file"])
+    if "cors_allow_credentials" in kwargs:
+        env["PROXY_CORS_ALLOW_CREDENTIALS"] = str(kwargs["cors_allow_credentials"]).lower()
 
     print(f"Starting Go proxy at http://localhost:{port} -> {target}")
 

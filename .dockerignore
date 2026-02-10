@@ -1,0 +1,15 @@
+.git
+.vscode
+.cursor
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc
+*.pyo
+.gitignore
+.cursorignore
+.python-version
+MANIFEST.in
+CLAUDE.md
+LICENSE
