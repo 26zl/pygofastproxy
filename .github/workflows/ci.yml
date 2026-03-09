@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.7'
+          go-version: '1.25.8'
           cache-dependency-path: pygofastproxy/go/go.sum
 
       - name: Install package with test dependencies

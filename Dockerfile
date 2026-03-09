@@ -1,5 +1,5 @@
 # Stage 1: Build Go binary
-FROM golang:1.25-bookworm AS go-builder
+FROM golang:1.25.8-bookworm AS go-builder
 
 WORKDIR /build
 COPY pygofastproxy/go/ .
