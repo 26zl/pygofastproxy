@@ -48,10 +48,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install package and pip-audit
+      - name: Install package and freeze deps
         run: |
           pip install -e .
-          pip install pip-audit
+          pip freeze > /tmp/requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
 
       - name: Run pip-audit
-        run: pip-audit
+        run: pip-audit -r /tmp/requirements.txt
