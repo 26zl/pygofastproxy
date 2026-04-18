@@ -102,10 +102,8 @@ func addCORSHeaders(ctx *fasthttp.RequestCtx) {
 	if len(origin) == 0 {
 		return
 	}
-	originStr := string(origin)
-
 	allowedOriginsMutex.RLock()
-	isAllowed := allowedOriginsCache[originStr]
+	isAllowed := allowedOriginsCache[string(origin)]
 	creds := corsAllowCreds
 	allowedOriginsMutex.RUnlock()
 
