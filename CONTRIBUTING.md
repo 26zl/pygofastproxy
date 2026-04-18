@@ -32,7 +32,7 @@ pytest tests/ -v
 python benchmarks/benchmark.py
 ```
 
-**Requirements:** Python 3.8+ and Go 1.25+.
+**Requirements:** Python 3.10+ and Go 1.25+.
 
 ## Pull Requests
 

@@ -1,12 +1,12 @@
 # Stage 1: Build Go binary
-FROM golang:1.25.8-bookworm AS go-builder
+FROM golang:1.25.9-bookworm AS go-builder
 
 WORKDIR /build
 COPY pygofastproxy/go/ .
 RUN go build -trimpath -ldflags="-s -w" -o proxy .
 
 # Stage 2: Runtime
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 

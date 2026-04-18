@@ -212,10 +212,8 @@ var (
 	healthCacheTime atomic.Int64 // unix nanoseconds
 )
 
-const healthCacheTTL = 5 * time.Second
-
-func isBackendReachable(client *fasthttp.Client, backendURL *url.URL, timeout time.Duration) bool {
-	if time.Since(time.Unix(0, healthCacheTime.Load())) < healthCacheTTL {
+func isBackendReachable(client *fasthttp.Client, backendURL *url.URL, timeout, cacheTTL time.Duration) bool {
+	if time.Since(time.Unix(0, healthCacheTime.Load())) < cacheTTL {
 		return healthCacheOK.Load()
 	}
 
@@ -240,7 +238,7 @@ func isBackendReachable(client *fasthttp.Client, backendURL *url.URL, timeout ti
 
 func newProxyServer(target string, config *Config) (*fasthttp.Server, error) {
 	initAllowedOrigins(config.CORSAllowCredentials)
-	startOriginsRefresh(config.CORSAllowCredentials, 30*time.Second)
+	startOriginsRefresh(config.CORSAllowCredentials, config.CORSRefreshInterval)
 
 	backendURL, err := validateTarget(target)
 	if err != nil {
@@ -250,11 +248,12 @@ func newProxyServer(target string, config *Config) (*fasthttp.Server, error) {
 	var rateLimiter *RateLimiter
 	if config.RateLimitRPS > 0 {
 		rateLimiter = NewRateLimiter(config.RateLimitRPS)
+		cleanupInterval := config.RateLimitCleanupInterval
 		go func() {
-			ticker := time.NewTicker(5 * time.Minute)
+			ticker := time.NewTicker(cleanupInterval)
 			defer ticker.Stop()
 			for range ticker.C {
-				rateLimiter.Cleanup()
+				rateLimiter.Cleanup(cleanupInterval)
 			}
 		}()
 	}
@@ -282,7 +281,7 @@ func newProxyServer(target string, config *Config) (*fasthttp.Server, error) {
 				ctx.SetBodyString(`{"error":"rate limit exceeded"}`)
 				return
 			}
-			healthy := isBackendReachable(client, backendURL, 2*time.Second)
+			healthy := isBackendReachable(client, backendURL, 2*time.Second, config.HealthCacheTTL)
 			if !healthy {
 				ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 				ctx.SetContentType("application/json")

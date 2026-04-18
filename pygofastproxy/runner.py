@@ -72,6 +72,12 @@ def is_rebuild_needed(go_dir: Path, binary_file: Path) -> bool:
 
 # Run the Go proxy, rebuilding if needed.
 def run_proxy(target="http://localhost:4000", port=8080, **kwargs):
+    """Start the Go proxy as a subprocess and return the Popen handle.
+
+    The caller owns the process lifecycle. Use as a context manager
+    (``with run_proxy() as proc:``) or call ``proc.terminate()`` +
+    ``proc.wait()`` to avoid leaking the subprocess on shutdown.
+    """
     # Validate target URL
     try:
         parsed = urlparse(target)

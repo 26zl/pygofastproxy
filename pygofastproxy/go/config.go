@@ -8,31 +8,37 @@ import (
 )
 // Config holds the configuration settings for the proxy server.
 type Config struct {
-	MaxConnsPerHost      int
-	MaxConnWaitTimeout   time.Duration
-	ReadTimeout          time.Duration
-	WriteTimeout         time.Duration
-	MaxIdleConnDuration  time.Duration
-	ReadBufferSize       int
-	WriteBufferSize      int
-	RateLimitRPS         int
-	MaxRequestBodySize   int
-	TLSCertFile          string
-	TLSKeyFile           string
-	CORSAllowCredentials bool
+	MaxConnsPerHost          int
+	MaxConnWaitTimeout       time.Duration
+	ReadTimeout              time.Duration
+	WriteTimeout             time.Duration
+	MaxIdleConnDuration      time.Duration
+	ReadBufferSize           int
+	WriteBufferSize          int
+	RateLimitRPS             int
+	MaxRequestBodySize       int
+	TLSCertFile              string
+	TLSKeyFile               string
+	CORSAllowCredentials     bool
+	CORSRefreshInterval      time.Duration
+	RateLimitCleanupInterval time.Duration
+	HealthCacheTTL           time.Duration
 }
 // LoadConfig reads configuration from environment variables and returns a Config struct with the settings.
 func LoadConfig() *Config {
 	config := &Config{
-		MaxConnsPerHost:    1000,
-		MaxConnWaitTimeout: 5 * time.Second,
-		ReadTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		MaxIdleConnDuration: 60 * time.Second,
-		ReadBufferSize:     16 * 1024,
-		WriteBufferSize:    16 * 1024,
-		RateLimitRPS:       1000,
-		MaxRequestBodySize: 10 * 1024 * 1024,
+		MaxConnsPerHost:          1000,
+		MaxConnWaitTimeout:       5 * time.Second,
+		ReadTimeout:              10 * time.Second,
+		WriteTimeout:             10 * time.Second,
+		MaxIdleConnDuration:      60 * time.Second,
+		ReadBufferSize:           16 * 1024,
+		WriteBufferSize:          16 * 1024,
+		RateLimitRPS:             1000,
+		MaxRequestBodySize:       10 * 1024 * 1024,
+		CORSRefreshInterval:      30 * time.Second,
+		RateLimitCleanupInterval: 5 * time.Minute,
+		HealthCacheTTL:           5 * time.Second,
 	}
 
 	if val := os.Getenv("PROXY_MAX_CONNS_PER_HOST"); val != "" {
@@ -92,6 +98,21 @@ func LoadConfig() *Config {
 
 	if val := os.Getenv("PROXY_CORS_ALLOW_CREDENTIALS"); val != "" {
 		config.CORSAllowCredentials = val == "true" || val == "1"
+	}
+	if val := os.Getenv("PROXY_CORS_REFRESH_INTERVAL"); val != "" {
+		if parsed, err := time.ParseDuration(val); err == nil && parsed > 0 {
+			config.CORSRefreshInterval = parsed
+		}
+	}
+	if val := os.Getenv("PROXY_RATE_LIMIT_CLEANUP_INTERVAL"); val != "" {
+		if parsed, err := time.ParseDuration(val); err == nil && parsed > 0 {
+			config.RateLimitCleanupInterval = parsed
+		}
+	}
+	if val := os.Getenv("PROXY_HEALTH_CACHE_TTL"); val != "" {
+		if parsed, err := time.ParseDuration(val); err == nil && parsed > 0 {
+			config.HealthCacheTTL = parsed
+		}
 	}
 
 	return config

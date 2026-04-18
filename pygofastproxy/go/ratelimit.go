@@ -55,9 +55,9 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return false
 }
 
-// Cleanup removes stale buckets that haven't been used in 5 minutes.
-func (rl *RateLimiter) Cleanup() {
-	threshold := time.Now().Add(-5 * time.Minute)
+// Cleanup removes buckets that have been idle for longer than staleAfter.
+func (rl *RateLimiter) Cleanup(staleAfter time.Duration) {
+	threshold := time.Now().Add(-staleAfter)
 	rl.buckets.Range(func(key, value any) bool {
 		b := value.(*bucket)
 		b.mu.Lock()

@@ -69,7 +69,7 @@ pygofastproxy gives you Go-level proxy performance from a `pip install`:
 
 4. **Send requests** to `http://localhost:8080` — they'll be proxied to your backend with security headers, rate limiting, and CORS handling added automatically.
 
-**Requirements:** Python 3.8+ and [Go](https://golang.org/dl/) (for building the proxy binary on first run). The binary is cached and only rebuilt when source changes.
+**Requirements:** Python 3.10+ and [Go](https://golang.org/dl/) (for building the proxy binary on first run). The binary is cached and only rebuilt when source changes.
 
 
 ## Configuration
